@@ -34,6 +34,10 @@ RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 # Copiar el script del balanceador
 COPY balancer.py ./
 
+# Copiar los stubs gRPC generados localmente desde contrato.proto
+COPY contrato_pb2.py ./
+COPY contrato_pb2_grpc.py ./
+
 # Asignar permisos al usuario de la aplicación
 RUN chown -R "${APP_USER}:${APP_GROUP}" /app
 
