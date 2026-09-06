@@ -15,7 +15,6 @@ container expone dos puertos hacia afuera con ngrok: uno para SSH y otro
 para el tráfico HTTP del servicio.
 
 ## Diagrama de arquitectura
-
 ![Arquitectura Parte 1](diagrama-arquitectura-parte1.svg)
 
 El servidor corre un container Docker. Dentro del container, dos procesos
