@@ -15,7 +15,7 @@ ENV PORT=${PORT}
 RUN apk add --no-cache \
         python3 \
         py3-pip \
-    openjdk17-jre \
+        openjdk17-jre \
         libcap \
         curl && \
     setcap 'cap_net_bind_service=+ep' $(readlink -f $(which python3))
@@ -25,10 +25,14 @@ RUN addgroup -S "${APP_GROUP}" && adduser -S -G "${APP_GROUP}" -h /app "${APP_US
 
 WORKDIR /app
 
-# Copiar e instalar dependencias de Python si existen
+# Instalar dependencias, incluido grpcio-tools para generar los stubs del proto
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
-COPY contrato_pb2.py contrato_pb2_grpc.py ./
+
+
+RUN python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. contrato.proto
+
+
 
 # Copiar el script del balanceador
 COPY balancer.py ./

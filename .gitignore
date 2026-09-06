@@ -10,6 +10,8 @@
 # Python
 __pycache__/
 *.py[cod]
+contrato_pb2.py
+contrato_pb2_grpc.py
 *$py.class
 *.so
 .Python
@@ -36,6 +38,7 @@ wheels/
 
 # Logs y depuración
 *.log
+*.jar
 logs/
 
 # IDEs y editores
