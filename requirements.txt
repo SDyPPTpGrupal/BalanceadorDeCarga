@@ -1,0 +1,2 @@
+# Dependencias para el balanceador de carga casero
+# Si necesitas librerías externas (ej. requests, urllib3, aiohttp), agrégalas aquí.

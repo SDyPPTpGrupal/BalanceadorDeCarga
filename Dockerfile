@@ -1,42 +1,45 @@
-FROM ubuntu:24.04
-ENV DEBIAN_FRONTEND=noninteractive
+FROM alpine:latest
 
-# Instalar SSH, Python, Java y herramientas básicas
-RUN apt-get update && \
-    apt-get install -y \
-        openssh-server \
-        sudo \
-        openjdk-21-jre-headless \
+# Evitar buffering en la salida estándar de Python para ver logs en tiempo real
+ENV PYTHONUNBUFFERED=1
+
+# Argumentos configurables para no quemar usuarios ni puertos en el código del Dockerfile
+ARG APP_USER=balancer
+ARG APP_GROUP=balancer
+ARG PORT=80
+
+# Variable de entorno de ejecución para el puerto del servicio
+ENV PORT=${PORT}
+
+# Instalar Python 3, pip, libcap (para permitir enlazar puertos bajos sin ser root) y curl para diagnóstico
+RUN apk add --no-cache \
         python3 \
-        python3-pip \
-        curl \
-        iputils-ping \
-        net-tools \
-        nano && \
-    rm -rf /var/lib/apt/lists/*
+        py3-pip \
+        libcap \
+        curl && \
+    setcap 'cap_net_bind_service=+ep' $(readlink -f $(which python3))
 
-# Crear directorio necesario para SSH
-RUN mkdir -p /run/sshd
+# Crear usuario y grupo no privilegiados configurables
+RUN addgroup -S "${APP_GROUP}" && adduser -S -G "${APP_GROUP}" -h /app "${APP_USER}"
 
-# Crear usuario para los alumnos
-RUN useradd -m -s /bin/bash alumno
+WORKDIR /app
 
-# Establecer contraseña
-RUN echo "alumno:alumno" | chpasswd
+# Copiar e instalar dependencias de Python si existen
+COPY requirements.txt ./
+RUN if [ -s requirements.txt ]; then pip install --no-cache-dir -r requirements.txt --break-system-packages; fi
 
-# Dar sudo al usuario
-RUN echo "alumno ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/alumno
+# Copiar el script del balanceador
+COPY balancer.py ./
 
-# Configuración SSH
-RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+# Asignar permisos al usuario de la aplicación
+RUN chown -R "${APP_USER}:${APP_GROUP}" /app
 
-# 22: SSH para que los equipos entren a deployar
-# 8080: balanceador (única URL pública del servicio)
-# 9001, 9002: puertos internos de las apps Python/Java (ajustar si usan otros)
-EXPOSE 22
-EXPOSE 8080
-EXPOSE 9001
-EXPOSE 9002
+# Ejecutar como usuario no privilegiado
+USER "${APP_USER}"
 
-CMD ["/usr/sbin/sshd", "-D"]
+# Puerto interno parametrizado
+EXPOSE ${PORT}
+
+# Comando de inicio del balanceador casero
+CMD ["python3", "balancer.py"]
+
