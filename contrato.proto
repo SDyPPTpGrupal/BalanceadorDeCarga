@@ -30,6 +30,9 @@ service Servicio {
 
   // Reemplaza a POST /personas
   rpc CrearPersona(NuevaPersona) returns (RespuestaPersona);
+
+  // Notificación local del CI/CD al balanceador.
+  rpc NotificarDeploy(NotificarDeployPedido) returns (NotificarDeployRespuesta);
 }
 
 // Un mensaje de pedido propio por método, aunque hoy los tres estén vacíos. Si se
@@ -104,4 +107,17 @@ message RespuestaPersona {
 message ListaPersonas {
   string servido_por = 1;
   repeated Persona personas = 2;  // ordenadas por id ascendente
+}
+
+message NotificarDeployPedido {
+  string nombre = 1;
+  string host = 2;
+  int32 puerto = 3;
+  int32 version = 4;
+}
+
+message NotificarDeployRespuesta {
+  bool aceptado = 1;
+  string mensaje = 2;
+  int32 posicion_cola = 3;
 }
