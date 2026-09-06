@@ -15,6 +15,7 @@ ENV PORT=${PORT}
 RUN apk add --no-cache \
         python3 \
         py3-pip \
+    openjdk17-jre \
         libcap \
         curl && \
     setcap 'cap_net_bind_service=+ep' $(readlink -f $(which python3))
@@ -26,7 +27,8 @@ WORKDIR /app
 
 # Copiar e instalar dependencias de Python si existen
 COPY requirements.txt ./
-RUN if [ -s requirements.txt ]; then pip install --no-cache-dir -r requirements.txt --break-system-packages; fi
+RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
+COPY contrato_pb2.py contrato_pb2_grpc.py ./
 
 # Copiar el script del balanceador
 COPY balancer.py ./
