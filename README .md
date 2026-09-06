@@ -15,14 +15,20 @@ container expone dos puertos hacia afuera con ngrok: uno para SSH y otro
 para el tráfico HTTP del servicio.
 
 ## Diagrama de arquitectura
-![Arquitectura Parte 1](diagrama-arquitectura-parte1.svg)
 
-El servidor corre un container Docker. Dentro del container, dos procesos
-escuchan en los puertos internos **22** (SSH) y **80** (HTTP). Docker mapea
-esos puertos internos a puertos distintos en la máquina host, y ngrok toma
-esos puertos del host y los expone a internet con una URL pública. Desde
-otra casa, el equipo de Java o Python se conecta a esas URLs para
-desplegar o consumir el servicio.
+![Arquitectura Parte 1](diagrama-arquitectura-parte1.png)
+
+El servidor es un recurso compartido operado por el equipo de Plataforma
+(el "cloud provider"): ellos lo montan y reparten el acceso, pero no lo
+usan para su propia app. Dentro corre un container Docker (Ubuntu 24.04)
+con dos procesos escuchando en los puertos internos **22** (SSH) y **80**
+(HTTP). Docker mapea esos puertos internos a puertos distintos en la
+máquina host, y un túnel los expone a internet con una URL pública.
+
+Dos casas remotas (los equipos de Java y Python) se conectan a esos
+puertos — y ahí está el punto central de la Parte 1: **compiten por el
+mismo puerto de producción**. Solo una app puede tenerlo ocupado a la
+vez; desplegar significa parar a la que está y levantar la propia.
 
 ## Mapeo de puertos
 
