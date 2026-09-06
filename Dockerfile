@@ -29,10 +29,9 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 
-
+# Generar los stubs dentro de la imagen desde el contrato compartido.
+COPY contrato.proto ./
 RUN python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. contrato.proto
-
-
 
 # Copiar el script del balanceador
 COPY balancer.py ./

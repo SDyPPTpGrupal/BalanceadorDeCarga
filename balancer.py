@@ -27,7 +27,7 @@ current_backend = BACKEND_URL
 logging.basicConfig(
     filename=LOG_FILE,
     level=logging.INFO,
-    format="%(asctime)s%z | balancer | %(message)s",
+    format="%(asctime)s | balancer | %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 
