@@ -152,7 +152,7 @@ docker compose exec -d balanceador sh -c "cd /deploy/vieja && PYTHONPATH=/deploy
 Iniciar el servidor Java dentro del contenedor:
 
 ```powershell
-docker compose exec -d balanceador java -jar /deploy/nueva/app.jar 9002
+docker compose exec -d balanceador java -jar /deploy/nueva/app.jar 9002 nueva 2
 ```
 
 Antes de conmutar, verificar que el backend nuevo responda al RPC `Salud` y devuelva `SANO`.

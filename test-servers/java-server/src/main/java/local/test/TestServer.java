@@ -17,9 +17,20 @@ import io.grpc.stub.StreamObserver;
 
 public final class TestServer {
     private static final class Service extends ServicioGrpc.ServicioImplBase {
+        private final String app;
+        private final int version;
+
+        private Service(String app, int version) {
+            this.app = app;
+            this.version = version;
+        }
+
         @Override
         public void identidad(IdentidadPedido request, StreamObserver<Instancia> responseObserver) {
-            responseObserver.onNext(Instancia.getDefaultInstance());
+            responseObserver.onNext(Instancia.newBuilder()
+                    .setApp(app)
+                    .setVersion(version)
+                    .build());
             responseObserver.onCompleted();
         }
 
@@ -27,6 +38,8 @@ public final class TestServer {
         public void salud(SaludPedido request, StreamObserver<EstadoSalud> responseObserver) {
             responseObserver.onNext(EstadoSalud.newBuilder()
                 .setStatus(EstadoSalud.Estado.SANO)
+                    .setApp(app)
+                    .setVersion(version)
                     .build());
             responseObserver.onCompleted();
         }
@@ -52,8 +65,10 @@ public final class TestServer {
 
     public static void main(String[] args) throws Exception {
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 9002;
-        Server server = ServerBuilder.forPort(port).addService(new Service()).build().start();
-        System.out.println("Java gRPC de prueba escuchando en " + port);
+        String app = args.length > 1 ? args[1] : "java";
+        int version = args.length > 2 ? Integer.parseInt(args[2]) : 2;
+        Server server = ServerBuilder.forPort(port).addService(new Service(app, version)).build().start();
+        System.out.println("Java gRPC de prueba escuchando en " + port + " app=" + app + " version=" + version);
         Runtime.getRuntime().addShutdownHook(new Thread(server::shutdown));
         server.awaitTermination();
     }
