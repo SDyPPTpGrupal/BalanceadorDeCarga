@@ -14,18 +14,14 @@ ENV DEPLOY_DIR=/deploy
 ENV OLD_BACKEND_URL=http://host.docker.internal:9001
 ENV NEW_BACKEND_URL=http://host.docker.internal:9002
 
-# Instalar SSH, Python, Java y herramientas básicas
+# Instalar solo lo necesario para SSH/SCP, el balanceador Python y los JAR Java
 RUN apt-get update && \
     apt-get install -y \
         openssh-server \
-        sudo \
         openjdk-21-jre-headless \
         python3 \
         python3-pip \
-        curl \
-        iputils-ping \
-        net-tools \
-        nano && \
+        curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Crear directorios necesarios para SSH y archivos subidos por SCP
@@ -46,7 +42,7 @@ RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/s
 
 WORKDIR /app
 
-# Instalar dependencias del balancer, incluido grpcio-tools para generar los stubs del proto
+# Instalar dependencias necesarias en tiempo de ejecución
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 

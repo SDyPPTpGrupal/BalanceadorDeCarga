@@ -194,25 +194,25 @@ El control escucha solamente dentro del contenedor, en `127.0.0.1:8088`. Se pued
 Conmutar a la version nueva:
 
 ```powershell
-docker compose exec balanceador curl.exe -s -X POST http://127.0.0.1:8088/__switch -H "Content-Type: application/json" -d '{"version":"nueva"}'
+docker compose exec balanceador curl -s -X POST http://127.0.0.1:8088/__switch -H "Content-Type: application/json" -d '{"version":"nueva"}'
 ```
 
 Volver a la version vieja:
 
 ```powershell
-docker compose exec balanceador curl.exe -s -X POST http://127.0.0.1:8088/__switch -H "Content-Type: application/json" -d '{"version":"vieja"}'
+docker compose exec balanceador curl -s -X POST http://127.0.0.1:8088/__switch -H "Content-Type: application/json" -d '{"version":"vieja"}'
 ```
 
 Rollback al backend anterior:
 
 ```powershell
-docker compose exec balanceador curl.exe -s -X POST http://127.0.0.1:8088/__rollback
+docker compose exec balanceador curl -s -X POST http://127.0.0.1:8088/__rollback
 ```
 
 Consultar el backend activo:
 
 ```powershell
-docker compose exec balanceador curl.exe -s http://127.0.0.1:8088/__status
+docker compose exec balanceador curl -s http://127.0.0.1:8088/__status
 ```
 
 `__switch` primero consulta `Salud`. Si la version nueva no esta sana, la conmutacion devuelve `503` y el backend anterior sigue atendiendo.
