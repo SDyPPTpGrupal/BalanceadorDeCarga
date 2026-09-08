@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import threading
-from collections import deque
 from concurrent import futures
 from urllib.parse import urlsplit
 
@@ -24,7 +23,6 @@ LOG_FILE = os.environ.get("BALANCER_LOG", "balancer.log")
 
 backend_lock = threading.Lock()
 current_backend = BACKEND_URL
-deploy_queue = deque()
 
 logging.basicConfig(
     filename=LOG_FILE,
@@ -39,7 +37,6 @@ RPC_TYPES = {
     "Echo": (contrato_pb2.PingPedido, contrato_pb2.PongRespuesta),
     "ListarPersonas": (contrato_pb2.ListarPersonasPedido, contrato_pb2.ListaPersonas),
     "CrearPersona": (contrato_pb2.NuevaPersona, contrato_pb2.RespuestaPersona),
-    "NotificarDeploy": (contrato_pb2.NotificarDeployPedido, contrato_pb2.NotificarDeployRespuesta),
 }
 
 
@@ -65,44 +62,8 @@ def check_backend(backend):
         channel.close()
 
 
-def notificar_deploy(pedido, context):
-    if not pedido.nombre or not pedido.host or pedido.puerto <= 0:
-        context.abort(grpc.StatusCode.INVALID_ARGUMENT, "nombre, host y puerto son obligatorios")
-
-    backend = f"http://{pedido.host}:{pedido.puerto}"
-    try:
-        if not check_backend(backend):
-            context.abort(grpc.StatusCode.UNAVAILABLE, "el backend no está saludable")
-    except (ValueError, grpc.RpcError):
-        context.abort(grpc.StatusCode.UNAVAILABLE, "no se pudo verificar el backend")
-
-    with backend_lock:
-        if any(item["backend"] == backend for item in deploy_queue):
-            return contrato_pb2.NotificarDeployRespuesta(
-                aceptado=False,
-                mensaje="el backend ya está en la cola",
-            )
-        deploy_queue.append(
-            {
-                "nombre": pedido.nombre,
-                "backend": backend,
-                "version": pedido.version,
-            }
-        )
-        position = len(deploy_queue)
-
-    logging.info("deploy notificado nombre=%s backend=%s version=%s", pedido.nombre, backend, pedido.version)
-    return contrato_pb2.NotificarDeployRespuesta(
-        aceptado=True,
-        mensaje="backend agregado a la cola de deploy",
-        posicion_cola=position,
-    )
-
-
 class ProxyServicer:
     def __getattr__(self, method_name):
-        if method_name == "NotificarDeploy":
-            return notificar_deploy
         if method_name not in RPC_TYPES:
             raise AttributeError(method_name)
 
