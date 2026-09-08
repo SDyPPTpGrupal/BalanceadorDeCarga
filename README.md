@@ -48,8 +48,8 @@ APP_USER=balancer
 APP_PASSWORD=una-clave
 PUBLIC_PORT=89
 SCP_PORT=2222
-OLD_BACKEND_URL=http://host.docker.internal:9001
-NEW_BACKEND_URL=http://host.docker.internal:9002
+OLD_BACKEND_URL=http://127.0.0.1:9001
+NEW_BACKEND_URL=http://127.0.0.1:9002
 ```
 
 Los backends se ejecutan dentro del mismo contenedor y el balanceador los alcanza por `127.0.0.1`. No es necesario instalar Python ni Java en Windows.
@@ -135,7 +135,57 @@ Los nombres `app.py`, `app.jar` y la opcion `--port` son ejemplos: reemplazarlos
 docker compose exec balanceador pip3 install -r /deploy/nueva/requirements.txt --break-system-packages
 ```
 
+### Servidores de prueba incluidos
+
+El repositorio incluye `test-servers/python_server.py` y un servidor Java gRPC en
+`test-servers/java-server`. Ambos implementan el mismo `contrato.proto`, devuelven respuestas
+vacias y responden `SANO` en `Salud`.
+
+Construir el JAR Java desde PowerShell:
+
+```powershell
+mvn -q -f test-servers\java-server\pom.xml package
+```
+
+El JAR queda en `test-servers/java-server/target/grpc-test-server-1.0.0.jar`. Para subirlo como
+version nueva:
+
+```powershell
+scp -P 2222 test-servers\java-server\target\grpc-test-server-1.0.0.jar usuario@IP_TAILSCALE_WINDOWS:/deploy/nueva/app.jar
+```
+
+Para subir el servidor Python y los stubs que necesita:
+
+```powershell
+scp -P 2222 test-servers\python_server.py usuario@IP_TAILSCALE_WINDOWS:/deploy/vieja/app.py
+scp -P 2222 contrato_pb2.py usuario@IP_TAILSCALE_WINDOWS:/deploy/vieja/
+scp -P 2222 contrato_pb2_grpc.py usuario@IP_TAILSCALE_WINDOWS:/deploy/vieja/
+```
+
+Iniciar el servidor Python dentro del contenedor:
+
+```powershell
+docker compose exec -d balanceador sh -c "cd /deploy/vieja && PYTHONPATH=/deploy/vieja python3 app.py --port 9001"
+```
+
+Iniciar el servidor Java dentro del contenedor:
+
+```powershell
+docker compose exec -d balanceador java -jar /deploy/nueva/app.jar 9002
+```
+
 Antes de conmutar, verificar que el backend nuevo responda al RPC `Salud` y devuelva `SANO`.
+
+## Flujo completo de deploy blue-green
+
+1. El backend viejo sigue atendiendo en `127.0.0.1:9001`.
+2. Se suben los archivos nuevos a `/deploy/nueva/` sin detener el backend viejo.
+3. Se inicia el backend nuevo en `127.0.0.1:9002`.
+4. Se prueba el health check del backend nuevo.
+5. Se ejecuta `__switch` a `nueva`.
+6. Las nuevas requests pasan al backend nuevo; el backend viejo continúa vivo para rollback.
+
+El usuario nunca llama directamente a `9001` o `9002`: siempre llama al balanceador en `http://IP_TAILSCALE_WINDOWS:89`.
 
 ## Conmutar y hacer rollback
 

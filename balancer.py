@@ -235,7 +235,7 @@ def run():
     threading.Thread(target=control_server.serve_forever, daemon=True).start()
     threading.Thread(target=public_server.serve_forever, daemon=True).start()
     print(
-        f"[*] Balanceador HTTP en {PORT}, backends gRPC {backends}; control local en {CONTROL_PORT}",
+        f"[*] Balanceador HTTP en {PORT}, activo gRPC {forced_backend}; control local en {CONTROL_PORT}",
         flush=True,
     )
     try:

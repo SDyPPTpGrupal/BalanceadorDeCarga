@@ -32,6 +32,7 @@ sdist/
 var/
 wheels/
 *.egg-info/
+test-servers/**/target/
 .installed.cfg
 *.egg
 .pytest_cache/
