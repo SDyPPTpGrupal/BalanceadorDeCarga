@@ -8,7 +8,7 @@ services:
         PORT: 80
         SSH_PORT: 22
     ports:
-      - "${PUBLIC_PORT:-80}:80"
+      - "${PUBLIC_PORT:-89}:80"
       - "${SCP_PORT:-2222}:22"
     environment:
       PORT: 80
