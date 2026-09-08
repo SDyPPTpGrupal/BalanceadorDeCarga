@@ -1,4 +1,5 @@
 import json
+import http.server
 import threading
 import unittest
 from concurrent import futures
@@ -74,10 +75,17 @@ class BalancerIntegrationTest(unittest.TestCase):
         balancer.CONTROL_PORT = cls.control_port
         balancer.OLD_BACKEND_URL = f"http://127.0.0.1:{cls.old_port}"
         balancer.NEW_BACKEND_URL = f"http://127.0.0.1:{cls.new_port}"
-        balancer.current_backend = balancer.OLD_BACKEND_URL
-        cls.proxy_server = balancer.create_grpc_server()
-        cls.proxy_server.start()
-        cls.control_server = __import__("http.server", fromlist=["ThreadingHTTPServer"]).ThreadingHTTPServer(
+        balancer.backends = [balancer.OLD_BACKEND_URL, balancer.NEW_BACKEND_URL]
+        balancer.next_backend = 0
+        cls.public_server = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", cls.balancer_port), balancer.PublicHandler
+        )
+        cls.public_thread = threading.Thread(
+            target=cls.public_server.serve_forever,
+            daemon=True,
+        )
+        cls.public_thread.start()
+        cls.control_server = http.server.ThreadingHTTPServer(
             ("127.0.0.1", cls.control_port), balancer.ControlHandler
         )
         cls.control_thread = threading.Thread(
@@ -89,49 +97,63 @@ class BalancerIntegrationTest(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.control_server.shutdown()
-        cls.proxy_server.stop(0)
+        cls.public_server.shutdown()
         cls.python_server.stop(0)
         cls.java_server.stop(0)
 
     def setUp(self):
-        self.channel = grpc.insecure_channel(f"127.0.0.1:{self.balancer_port}")
-        self.stub = contrato_pb2_grpc.ServicioStub(self.channel)
+        with balancer.backend_lock:
+            balancer.next_backend = 0
 
-    def tearDown(self):
-        self.channel.close()
-
-    def switch_to(self, version):
-        connection = HTTPConnection("127.0.0.1", self.control_port)
-        body = json.dumps({"version": version})
+    def request(self, method, path, payload=None):
+        connection = HTTPConnection("127.0.0.1", self.balancer_port)
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        if body is not None:
+            headers["Content-Length"] = str(len(body))
         connection.request(
-            "POST",
-            "/__switch",
+            method,
+            path,
             body=body,
-            headers={"Content-Type": "application/json", "Content-Length": str(len(body))},
+            headers=headers,
         )
         response = connection.getresponse()
         payload = json.loads(response.read())
         connection.close()
-        self.assertEqual(response.status, 200, payload)
+        return response.status, payload
 
-    def test_python_backend_handles_all_contract_operations(self):
-        identidad = self.stub.Identidad(contrato_pb2.IdentidadPedido())
-        self.assertEqual(identidad.app, "python")
-        self.assertEqual(self.stub.Salud(contrato_pb2.SaludPedido()).app, "python")
-        self.assertEqual(self.stub.Echo(contrato_pb2.PingPedido(ping="hola")).servido_por, "python")
+    def test_http_api_forwards_all_contract_operations(self):
+        status, identidad = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertEqual(identidad["app"], "python")
+
+        status, salud = self.request("GET", "/health")
+        self.assertEqual(status, 200)
+        self.assertEqual(salud["app"], "java")
+
+        status, echo = self.request("POST", "/echo", {"ping": "hola"})
+        self.assertEqual(status, 200)
+        self.assertEqual(echo["servido_por"], "python")
+
+        status, personas = self.request("GET", "/personas")
+        self.assertEqual(status, 200)
         self.assertEqual(
-            self.stub.ListarPersonas(contrato_pb2.ListarPersonasPedido()).personas[0].nombre,
+            personas["personas"][0]["nombre"],
             "Ada Lovelace",
         )
-        created = self.stub.CrearPersona(contrato_pb2.NuevaPersona(nombre="Grace", legajo=100201))
-        self.assertEqual(created.servido_por, "python")
 
-    def test_switch_to_java_mock_without_restarting_balancer(self):
-        self.switch_to("nueva")
-        self.assertEqual(self.stub.Identidad(contrato_pb2.IdentidadPedido()).app, "java")
-        self.assertEqual(self.stub.Echo(contrato_pb2.PingPedido(ping="hola")).servido_por, "java")
-        self.switch_to("vieja")
-        self.assertEqual(self.stub.Identidad(contrato_pb2.IdentidadPedido()).app, "python")
+        status, created = self.request(
+            "POST", "/personas", {"nombre": "Grace", "legajo": 100201}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(created["servido_por"], "python")
+
+    def test_requests_alternate_between_python_and_java(self):
+        first_status, first = self.request("GET", "/")
+        second_status, second = self.request("GET", "/")
+        self.assertEqual(first_status, 200)
+        self.assertEqual(second_status, 200)
+        self.assertEqual([first["app"], second["app"]], ["python", "java"])
 
 
 if __name__ == "__main__":

@@ -9,10 +9,9 @@ intercambiables detrás del balanceador del equipo Plataforma.
 > cambia sobre este documento y sube la versión — no se resuelve por chat ni se asume distinto de
 > cada lado.
 
-> ⚠️ **La v2.0 es un cambio incompatible.** El servicio deja de hablar HTTP/JSON y pasa a
-> **gRPC sobre HTTP/2 con Protobuf**. Un cliente de la v1.3 no puede hablar con un servidor v2.0.
-> Las consecuencias para los otros dos equipos están en §7 y §10: no son un detalle de
-> implementación, son trabajo que hay que negociar antes de escribir código.
+> ⚠️ Las dos aplicaciones hablan **gRPC sobre HTTP/2 con Protobuf** entre sí y con el
+> balanceador. La API pública del balanceador es **HTTP/JSON** en el puerto 80: el balanceador
+> traduce cada request HTTP a una llamada gRPC contra Python o Java.
 
 **Estado de implementación:** App Python ✅ al día con la v2.2 · App Java ⬜ pendiente (ver §7)
 
@@ -26,12 +25,13 @@ hace cada implementación cuando algo falla.
 
 | Regla | Valor |
 | :--- | :--- |
-| Transporte | **gRPC sobre HTTP/2** |
+| API pública | **HTTP/JSON** en el balanceador |
+| Transporte interno | **gRPC sobre HTTP/2** entre balanceador y aplicaciones |
 | Serialización | **Protobuf 3** (`contrato.proto`) |
 | Paquete proto | `sdypp` |
 | Servicio | `sdypp.Servicio` |
 | Canal | **Inseguro** (sin TLS): el cifrado lo pone Tailscale por debajo (ver §10) |
-| Puerto | Primer argumento de línea de comandos; si no, variable `PORT`; default **8080** |
+| Puerto público | Variable `PORT`; default **80** |
 | Identidad de la instancia | Variable de entorno **`HOST_NAME`** |
 | Nodo donde corre | Variable de entorno **`CASA`** |
 | Zona horaria | **`America/Argentina/Buenos_Aires`** en las dos implementaciones |
@@ -275,15 +275,18 @@ nodo registra qué hizo.
 
 ## 9. El servicio corre en contenedores
 
-Cada réplica es un contenedor. La base es otro.
+El balanceador y cada aplicación son contenedores separados. La base es otro contenedor.
+El cliente externo solo conoce al balanceador; Python y Java no publican sus puertos gRPC fuera
+de la red interna.
 
 | Regla | Valor |
 | :--- | :--- |
-| Puerto dentro del contenedor | `8080` |
-| Variables obligatorias | `HOST_NAME`, `CASA`, `TP_REDIS_URL` |
+| Puerto público del balanceador | `80` (`PORT`) |
+| Puertos gRPC internos | Python `9001`, Java `9002` |
+| Variables del balanceador | `OLD_BACKEND_URL`, `NEW_BACKEND_URL` |
+| `HEALTHCHECK` público | `GET /health` |
 | Usuario | **no-root** |
-| `HEALTHCHECK` | contra `grpc.health.v1.Health`, no con `curl` (no hay HTTP que consultar) |
-| Apagado | el contenedor recibe `SIGTERM`; el proceso tiene que hacer `server.stop(grace)` y no morir de golpe |
+| Apagado | el contenedor recibe `SIGTERM` y el servidor HTTP debe cerrarse ordenadamente |
 
 El `stop_grace_period` del contenedor tiene que ser **mayor que el `grace` del servidor**, o Docker
 manda `SIGKILL` en medio del drenado y el graceful shutdown no sirve de nada.
@@ -292,27 +295,15 @@ manda `SIGKILL` en medio del drenado y el graceful shutdown no sirve de nada.
 
 ## 10. Requisitos para el equipo Plataforma
 
-⚠️ **Estos requisitos cambiaron por completo con la v2.0.** No son ajustes: son condiciones sin
-las cuales el balanceador no puede reenviar tráfico.
-
-1. **El balanceador tiene que hablar HTTP/2.** gRPC no viaja sobre HTTP/1.1. Un proxy que lee una
-   request, elige backend y la reenvía con una librería HTTP/1.1 **no funciona con gRPC**. Las
-   salidas son dos:
-   - **Proxy de nivel 4 (TCP):** reenviar bytes sin entender el protocolo. Es el camino corto, pero
-     pierde la capacidad de ver qué RPC pasó — y con eso se cae el requisito del enunciado de que
-     el balanceador loguee a quién derivó cada operación con detalle.
-   - **Proxy gRPC real:** entender HTTP/2 y multiplexar streams. Es bastante más que las "menos de
-     cien líneas" que el enunciado estima para el balanceador.
-2. **El health check tiene que llamar a `grpc.health.v1.Health`**, no hacer un GET.
-3. **Una conexión gRPC es persistente y multiplexada.** No hay una conexión por request: el cliente
-   abre un canal y lo reusa. El balanceo por request deja de ser gratis — si reparte por conexión,
-   un cliente queda pegado a una réplica para siempre y el reparto no se ve en la demo.
-4. **La IP del cliente y el id de correlación viajan como metadata gRPC**, no como cabeceras HTTP:
-   `x-forwarded-for` y `x-request-id` en minúscula, que es como gRPC normaliza las claves.
-5. **ngrok:** el túnel HTTP del plan free no sirve para gRPC sin TLS end-to-end. Hay que exponer el
-   balanceador por el **túnel TCP**, y el cliente conectarse a ese host:puerto.
-6. **El verificador del equipo cruzado necesita un cliente gRPC.** Ya no puede ser un `curl` en un
-   `while`: hay que darles los stubs o un binario. Esto hay que avisarlo antes de la demo.
+1. El cliente externo llama por HTTP/JSON al balanceador en el puerto `80`.
+2. Para cada request, el balanceador elige el siguiente backend en round-robin:
+   Python, Java, Python, Java.
+3. El balanceador crea una llamada gRPC al método equivalente (`Identidad`, `Salud`, `Echo`,
+   `ListarPersonas` o `CrearPersona`) y transforma la respuesta Protobuf a JSON.
+4. Python y Java deben ser alcanzables por los nombres `app-python:9001` y `app-java:9002` dentro
+   de la red Docker, pero no necesitan publicar esos puertos al exterior.
+5. `GET /health` es el health check público del balanceador. El chequeo interno de una aplicación
+   usa el RPC gRPC `Salud`.
 
 ---
 
@@ -324,8 +315,9 @@ las cuales el balanceador no puede reenviar tráfico.
 | 1.1 | 06/09/2026 | El rate limiting sale del contrato y pasa a extensión. Se agrega el `503` de `/personas`. |
 | 1.2 | 06/09/2026 | `equipo` pasa a lista de objetos con `nombre`, `apellido` y `legajo`. `mensaje` se fija como texto plano. El `checksum` queda fuera del contrato. |
 | 1.3 | 06/09/2026 | `/personas` gana las reglas de validación, el orden en que se aplican y una matriz de casos borde. |
-| 2.0 | 06/09/2026 | **Cambio incompatible: el transporte pasa de HTTP/JSON a gRPC sobre HTTP/2 con Protobuf.** El esquema formal se muda a `contrato.proto`. Los códigos HTTP se reemplazan por códigos de estado gRPC. Trece casos borde desaparecen porque el tipado los hace imposibles. Se agrega `grpc.health.v1.Health`, el despliegue en contenedores (§9) y los requisitos nuevos de Plataforma (§10). |
+| 2.0 | 06/09/2026 | Las aplicaciones pasan a gRPC sobre HTTP/2 con Protobuf. |
 | 2.1 | 06/09/2026 | **Se sacan del contrato el RPC `Lenta` y las dos extensiones de App Python (`checksum` y rate limiting): el grupo decidió no usarlos.** El servicio queda en cinco RPC. El graceful shutdown sigue implementado, pero ya no hay un RPC lento con que evidenciarlo. |
 | **2.2** | **06/09/2026** | `Vacio` se reemplaza por un mensaje de pedido propio por método (`IdentidadPedido`, `SaludPedido`, `ListarPersonasPedido`): con uno compartido, el día que un método necesite un campo nuevo se lo agregaría también a los otros dos. `EstadoSalud.status` pasa de string a **enumerado**. |
+| **2.3** | **08/09/2026** | El balanceador expone HTTP/JSON en el puerto 80, usa gRPC hacia los backends y alterna peticiones entre Python y Java. |
 
 ---

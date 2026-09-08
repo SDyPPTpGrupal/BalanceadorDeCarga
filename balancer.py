@@ -1,14 +1,14 @@
-"""Servidor balanceador gRPC blue-green para backends locales."""
+"""Balanceador HTTP con backends internos gRPC."""
 
 import http.server
 import json
 import logging
 import os
 import threading
-from concurrent import futures
 from urllib.parse import urlsplit
 
 import grpc
+from google.protobuf.json_format import MessageToDict, ParseDict
 
 import contrato_pb2
 import contrato_pb2_grpc
@@ -16,13 +16,13 @@ import contrato_pb2_grpc
 
 PORT = int(os.environ.get("PORT", 80))
 CONTROL_PORT = int(os.environ.get("CONTROL_PORT", 8088))
-OLD_BACKEND_URL = os.environ.get("OLD_BACKEND_URL", "http://127.0.0.1:8080").rstrip("/")
-NEW_BACKEND_URL = os.environ.get("NEW_BACKEND_URL", "http://127.0.0.1:8081").rstrip("/")
-BACKEND_URL = os.environ.get("BACKEND_URL", OLD_BACKEND_URL).rstrip("/")
+OLD_BACKEND_URL = os.environ.get("OLD_BACKEND_URL", "http://app-python:9001").rstrip("/")
+NEW_BACKEND_URL = os.environ.get("NEW_BACKEND_URL", "http://app-java:9002").rstrip("/")
 LOG_FILE = os.environ.get("BALANCER_LOG", "balancer.log")
 
 backend_lock = threading.Lock()
-current_backend = BACKEND_URL
+backends = [OLD_BACKEND_URL, NEW_BACKEND_URL]
+next_backend = 0
 
 logging.basicConfig(
     filename=LOG_FILE,
@@ -47,67 +47,106 @@ def backend_target(backend):
     return parsed.netloc
 
 
-def get_backend():
+def get_next_backend():
+    global next_backend
+
     with backend_lock:
-        return current_backend
+        backend = backends[next_backend]
+        next_backend = (next_backend + 1) % len(backends)
+        return backend
 
 
-def check_backend(backend):
+def grpc_status_http_code(code):
+    return {
+        grpc.StatusCode.INVALID_ARGUMENT: 400,
+        grpc.StatusCode.NOT_FOUND: 404,
+        grpc.StatusCode.ALREADY_EXISTS: 409,
+        grpc.StatusCode.UNAVAILABLE: 503,
+        grpc.StatusCode.DEADLINE_EXCEEDED: 504,
+    }.get(code, 502)
+
+
+def call_backend(method_name, request):
+    backend = get_next_backend()
     channel = grpc.insecure_channel(backend_target(backend))
     try:
         stub = contrato_pb2_grpc.ServicioStub(channel)
-        response = stub.Salud(contrato_pb2.SaludPedido(), timeout=3)
-        return response.status == contrato_pb2.EstadoSalud.SANO
+        response = getattr(stub, method_name)(request, timeout=10)
+        logging.info("%s -> %s status=OK", method_name, backend)
+        return response
+    except grpc.RpcError as exc:
+        logging.error(
+            "%s -> %s status=%s error=%s",
+            method_name,
+            backend,
+            exc.code().name,
+            exc.details(),
+        )
+        raise
     finally:
         channel.close()
 
 
-class ProxyServicer:
-    def __getattr__(self, method_name):
-        if method_name not in RPC_TYPES:
-            raise AttributeError(method_name)
-
-        def forward(request, context):
-            backend = get_backend()
-            channel = grpc.insecure_channel(backend_target(backend))
-            try:
-                stub = contrato_pb2_grpc.ServicioStub(channel)
-                response = getattr(stub, method_name)(request, timeout=10)
-                logging.info("%s -> %s status=OK", method_name, backend)
-                return response
-            except grpc.RpcError as exc:
-                logging.error(
-                    "%s -> %s status=%s error=%s",
-                    method_name,
-                    backend,
-                    exc.code().name,
-                    exc.details(),
-                )
-                context.abort(exc.code(), exc.details())
-            finally:
-                channel.close()
-
-        return forward
+def response_json(response):
+    return MessageToDict(response, preserving_proto_field_name=True)
 
 
-def create_grpc_server():
-    servicer = ProxyServicer()
-    handlers = {}
-    for method_name, (request_type, response_type) in RPC_TYPES.items():
-        handlers[method_name] = grpc.unary_unary_rpc_method_handler(
-            getattr(servicer, method_name),
-            request_deserializer=request_type.FromString,
-            response_serializer=response_type.SerializeToString,
-        )
-    generic_handler = grpc.method_handlers_generic_handler("sdypp.Servicio", handlers)
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=16))
-    server.add_generic_rpc_handlers((generic_handler,))
-    server.add_insecure_port(f"[::]:{PORT}")
-    return server
+class PublicHandler(http.server.BaseHTTPRequestHandler):
+    """API HTTP pública; los backends se consultan exclusivamente por gRPC."""
+
+    routes = {
+        ("GET", "/"): ("Identidad", contrato_pb2.IdentidadPedido),
+        ("GET", "/health"): ("Salud", contrato_pb2.SaludPedido),
+        ("GET", "/personas"): ("ListarPersonas", contrato_pb2.ListarPersonasPedido),
+        ("POST", "/echo"): ("Echo", contrato_pb2.PingPedido),
+        ("POST", "/personas"): ("CrearPersona", contrato_pb2.NuevaPersona),
+    }
+
+    def send_json(self, status, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_json(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        return json.loads(self.rfile.read(length) or b"{}")
+
+    def handle_route(self, method):
+        route = urlsplit(self.path).path
+        route_info = self.routes.get((method, route))
+        if route_info is None:
+            self.send_json(404, {"error": "ruta no encontrada"})
+            return
+
+        method_name, request_type = route_info
+        try:
+            payload = self.read_json() if method == "POST" else {}
+            request = ParseDict(payload, request_type())
+            response = call_backend(method_name, request)
+            self.send_json(200, response_json(response))
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self.send_json(400, {"error": str(exc)})
+        except grpc.RpcError as exc:
+            self.send_json(
+                grpc_status_http_code(exc.code()),
+                {"error": exc.details() or exc.code().name},
+            )
+
+    def do_GET(self):
+        self.handle_route("GET")
+
+    def do_POST(self):
+        self.handle_route("POST")
+
+    def log_message(self, format, *args):
+        return
 
 
 class ControlHandler(http.server.BaseHTTPRequestHandler):
-    """Control local opcional; no forma parte del servicio gRPC público."""
+    """Control local opcional; no forma parte de la API HTTP pública."""
 
     def send_json(self, status, payload):
         body = json.dumps(payload).encode("utf-8")
@@ -123,58 +162,29 @@ class ControlHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/__status":
-            self.send_json(200, {"backend": get_backend()})
+            with backend_lock:
+                status = {"backends": backends, "next_backend": backends[next_backend]}
+            self.send_json(200, status)
             return
         self.send_json(404, {"error": "ruta no encontrada"})
-
-    def do_POST(self):
-        global current_backend
-
-        if self.path != "/__switch":
-            self.send_json(404, {"error": "ruta no encontrada"})
-            return
-        try:
-            payload = self.read_json()
-            backend = str(payload.get("backend", "")).rstrip("/")
-            if not backend:
-                version = str(payload["version"]).lower()
-                backend = {"vieja": OLD_BACKEND_URL, "nueva": NEW_BACKEND_URL}[version]
-            backend_target(backend)
-        except (ValueError, KeyError, json.JSONDecodeError) as exc:
-            self.send_json(400, {"error": str(exc)})
-            return
-
-        try:
-            if not check_backend(backend):
-                raise OSError("Salud no devolvió SANO")
-        except (OSError, grpc.RpcError) as exc:
-            logging.warning("switch rechazado backend=%s error=%s", backend, exc)
-            self.send_json(503, {"error": "backend no saludable", "backend": backend})
-            return
-
-        with backend_lock:
-            previous = current_backend
-            current_backend = backend
-        logging.info("switch -> %s status=OK previous=%s", backend, previous)
-        self.send_json(200, {"status": "switched", "backend": backend, "previous": previous})
 
     def log_message(self, format, *args):
         return
 
 
 def run():
-    grpc_server = create_grpc_server()
+    public_server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), PublicHandler)
     control_server = http.server.ThreadingHTTPServer(("127.0.0.1", CONTROL_PORT), ControlHandler)
     threading.Thread(target=control_server.serve_forever, daemon=True).start()
-    grpc_server.start()
+    threading.Thread(target=public_server.serve_forever, daemon=True).start()
     print(
-        f"[*] Balanceador gRPC en {PORT}, backend {current_backend}; control local en {CONTROL_PORT}",
+        f"[*] Balanceador HTTP en {PORT}, backends gRPC {backends}; control local en {CONTROL_PORT}",
         flush=True,
     )
     try:
-        grpc_server.wait_for_termination()
+        threading.Event().wait()
     except KeyboardInterrupt:
-        grpc_server.stop(0)
+        public_server.shutdown()
         control_server.shutdown()
 
 

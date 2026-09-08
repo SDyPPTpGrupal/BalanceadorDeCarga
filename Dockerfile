@@ -4,19 +4,20 @@ ENV PYTHONUNBUFFERED=1
 
 ARG APP_USER=alumno
 ARG APP_PASSWORD=alumno
-ARG PORT=8080
+ARG PORT=80
 ARG SSH_PORT=22
 
 ENV PORT=${PORT}
 ENV SSH_PORT=${SSH_PORT}
 ENV APP_USER=${APP_USER}
+ENV OLD_BACKEND_URL=http://app-python:9001
+ENV NEW_BACKEND_URL=http://app-java:9002
 
-# Instalar SSH, Python, Java y herramientas básicas
+# Instalar SSH, Python y herramientas básicas
 RUN apt-get update && \
     apt-get install -y \
         openssh-server \
         sudo \
-        openjdk-21-jre-headless \
         python3 \
         python3-pip \
         curl \
@@ -60,11 +61,8 @@ RUN chmod +x /entrypoint.sh
 RUN chown -R "${APP_USER}:${APP_USER}" /app
 
 # 22: SSH para que los equipos entren a deployar
-# 8080 (o el PORT que definas): balanceador (única URL pública del servicio)
-# 9001, 9002: puertos internos de las apps Python/Java (ajustar si usan otros)
+# 80 (o el PORT que definas): API HTTP pública del balanceador
 EXPOSE ${SSH_PORT}
 EXPOSE ${PORT}
-EXPOSE 9001
-EXPOSE 9002
 
 ENTRYPOINT ["/entrypoint.sh"]

@@ -13,7 +13,7 @@ echo "[*] sshd arrancado (pid ${SSHD_PID}) en puerto ${SSH_PORT:-22}"
 su -s /bin/bash -c "cd /app && exec python3 balancer.py" "${APP_USER}" &
 APP_PID=$!
 
-echo "[*] balancer.py arrancado (pid ${APP_PID}) en puerto ${PORT:-8080}"
+echo "[*] balancer.py arrancado (pid ${APP_PID}) en puerto ${PORT:-80}"
 
 # Si cualquiera de los dos procesos muere, el contenedor entero se cae
 wait -n "${SSHD_PID}" "${APP_PID}"
