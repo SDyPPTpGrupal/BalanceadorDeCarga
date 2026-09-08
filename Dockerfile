@@ -1,65 +1,70 @@
-FROM alpine:latest
-
-# Evitar buffering en la salida estándar de Python para ver logs en tiempo real
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Argumentos configurables para no quemar usuarios ni puertos en el código del Dockerfile
-ARG APP_USER=balancer
-ARG APP_GROUP=balancer
-ARG PORT=80
+ARG APP_USER=alumno
+ARG APP_PASSWORD=alumno
+ARG PORT=8080
 ARG SSH_PORT=22
-ARG APP_PASSWORD=changeme
 
-# Variables de entorno de ejecución
 ENV PORT=${PORT}
 ENV SSH_PORT=${SSH_PORT}
+ENV APP_USER=${APP_USER}
 
-# Instalar Python 3, pip, libcap (para bindear puertos bajos sin ser root), curl y openssh
-RUN apk add --no-cache \
+# Instalar SSH, Python, Java y herramientas básicas
+RUN apt-get update && \
+    apt-get install -y \
+        openssh-server \
+        sudo \
+        openjdk-21-jre-headless \
         python3 \
-        py3-pip \
-        openjdk17-jre \
-        libcap \
+        python3-pip \
         curl \
-        openssh \
-        bash && \
-    setcap 'cap_net_bind_service=+ep' $(readlink -f $(which python3))
+        iputils-ping \
+        net-tools \
+        nano && \
+    rm -rf /var/lib/apt/lists/*
 
-# Crear usuario y grupo no privilegiados configurables
-RUN addgroup -S "${APP_GROUP}" && adduser -S -G "${APP_GROUP}" -h /app -s /bin/bash "${APP_USER}"
+# Crear directorio necesario para SSH
+RUN mkdir -p /run/sshd
 
-# Configurar SSH: generar host keys, permitir login por password para el usuario app,
-# y setear la contraseña (cambiala en runtime idealmente con -e o mejor: usar claves públicas)
-RUN ssh-keygen -A && \
-    echo "${APP_USER}:${APP_PASSWORD}" | chpasswd && \
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
-    sed -i 's/#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config && \
-    sed -i "s/#Port 22/Port ${SSH_PORT}/" /etc/ssh/sshd_config && \
-    echo "AllowUsers ${APP_USER}" >> /etc/ssh/sshd_config
+# Crear usuario para los alumnos
+RUN useradd -m -s /bin/bash "${APP_USER}"
+
+# Establecer contraseña
+RUN echo "${APP_USER}:${APP_PASSWORD}" | chpasswd
+
+# Dar sudo al usuario
+RUN echo "${APP_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"${APP_USER}"
+
+# Configuración SSH
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
 
 WORKDIR /app
 
-# Instalar dependencias, incluido grpcio-tools para generar los stubs del proto
+# Instalar dependencias del balancer, incluido grpcio-tools para generar los stubs del proto
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 
-# Copiar el script del balanceador
+# Copiar el script del balanceador y los stubs gRPC generados localmente desde contrato.proto
 COPY balancer.py ./
-
-# Copiar los stubs gRPC generados localmente desde contrato.proto
 COPY contrato_pb2.py ./
 COPY contrato_pb2_grpc.py ./
 
-# Script de arranque: levanta sshd (como root, en background) y el balancer (como usuario app)
+# Script de arranque: levanta sshd (root) y balancer.py (como usuario alumno) juntos
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Asignar permisos al usuario de la aplicación
-RUN chown -R "${APP_USER}:${APP_GROUP}" /app
+# El usuario alumno necesita poder leer/escribir en /app (para recibir archivos por SCP)
+RUN chown -R "${APP_USER}:${APP_USER}" /app
 
-# Puertos internos parametrizados
-EXPOSE ${PORT} ${SSH_PORT}
+# 22: SSH para que los equipos entren a deployar
+# 8080 (o el PORT que definas): balanceador (única URL pública del servicio)
+# 9001, 9002: puertos internos de las apps Python/Java (ajustar si usan otros)
+EXPOSE ${SSH_PORT}
+EXPOSE ${PORT}
+EXPOSE 9001
+EXPOSE 9002
 
-# NOTA: no usamos USER acá porque sshd necesita arrancar como root.
-# El entrypoint.sh es quien baja privilegios para correr balancer.py como ${APP_USER}.
 ENTRYPOINT ["/entrypoint.sh"]
