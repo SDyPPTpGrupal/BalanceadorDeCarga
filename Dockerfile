@@ -28,7 +28,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Crear directorios necesarios para SSH y archivos subidos por SCP
-RUN mkdir -p /run/sshd /deploy/python /deploy/java
+RUN mkdir -p /run/sshd /deploy/vieja /deploy/nueva
 
 # Crear usuario para los alumnos
 RUN useradd -m -s /bin/bash "${APP_USER}"

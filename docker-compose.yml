@@ -15,6 +15,7 @@ services:
       SSH_PORT: 22
       APP_USER: ${APP_USER:-alumno}
       DEPLOY_DIR: /deploy
+      HEALTH_CHECK_INTERVAL: ${HEALTH_CHECK_INTERVAL:-5}
       OLD_BACKEND_URL: ${OLD_BACKEND_URL:-http://host.docker.internal:9001}
       NEW_BACKEND_URL: ${NEW_BACKEND_URL:-http://host.docker.internal:9002}
     extra_hosts:

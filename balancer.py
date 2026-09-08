@@ -18,11 +18,16 @@ PORT = int(os.environ.get("PORT", 80))
 CONTROL_PORT = int(os.environ.get("CONTROL_PORT", 8088))
 OLD_BACKEND_URL = os.environ.get("OLD_BACKEND_URL", "http://host.docker.internal:9001").rstrip("/")
 NEW_BACKEND_URL = os.environ.get("NEW_BACKEND_URL", "http://host.docker.internal:9002").rstrip("/")
+BACKENDS = os.environ.get("BACKENDS", f"{OLD_BACKEND_URL},{NEW_BACKEND_URL}")
+HEALTH_CHECK_INTERVAL = float(os.environ.get("HEALTH_CHECK_INTERVAL", "5"))
 LOG_FILE = os.environ.get("BALANCER_LOG", "balancer.log")
 
 backend_lock = threading.Lock()
-backends = [OLD_BACKEND_URL, NEW_BACKEND_URL]
+backends = [backend.strip().rstrip("/") for backend in BACKENDS.split(",") if backend.strip()]
+healthy_backends = set()
 next_backend = 0
+forced_backend = OLD_BACKEND_URL
+previous_backend = None
 
 logging.basicConfig(
     filename=LOG_FILE,
@@ -51,9 +56,21 @@ def get_next_backend():
     global next_backend
 
     with backend_lock:
-        backend = backends[next_backend]
-        next_backend = (next_backend + 1) % len(backends)
+        if forced_backend:
+            if forced_backend not in healthy_backends:
+                raise BackendUnavailable("el backend activo no está saludable")
+            return forced_backend
+
+        available = [backend for backend in backends if backend in healthy_backends]
+        if not available:
+            raise BackendUnavailable("no hay backends saludables")
+        backend = available[next_backend % len(available)]
+        next_backend = (next_backend + 1) % len(available)
         return backend
+
+
+class BackendUnavailable(Exception):
+    pass
 
 
 def grpc_status_http_code(code):
@@ -66,15 +83,43 @@ def grpc_status_http_code(code):
     }.get(code, 502)
 
 
+def check_backend(backend):
+    channel = grpc.insecure_channel(backend_target(backend))
+    try:
+        stub = contrato_pb2_grpc.ServicioStub(channel)
+        response = stub.Salud(contrato_pb2.SaludPedido(), timeout=3)
+        return response.status == contrato_pb2.EstadoSalud.SANO
+    except grpc.RpcError:
+        return False
+    finally:
+        channel.close()
+
+
+def refresh_health():
+    healthy = {backend for backend in backends if check_backend(backend)}
+    with backend_lock:
+        healthy_backends.clear()
+        healthy_backends.update(healthy)
+    return healthy
+
+
+def health_monitor():
+    while True:
+        refresh_health()
+        threading.Event().wait(HEALTH_CHECK_INTERVAL)
+
+
 def call_backend(method_name, request):
     backend = get_next_backend()
     channel = grpc.insecure_channel(backend_target(backend))
     try:
         stub = contrato_pb2_grpc.ServicioStub(channel)
         response = getattr(stub, method_name)(request, timeout=10)
-        logging.info("%s -> %s status=OK", method_name, backend)
-        return response
+        return response, backend
     except grpc.RpcError as exc:
+        if exc.code() in (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED):
+            with backend_lock:
+                healthy_backends.discard(backend)
         logging.error(
             "%s -> %s status=%s error=%s",
             method_name,
@@ -125,8 +170,10 @@ class PublicHandler(http.server.BaseHTTPRequestHandler):
         try:
             payload = self.read_json() if method == "POST" else {}
             request = ParseDict(payload, request_type())
-            response = call_backend(method_name, request)
-            self.send_json(200, response_json(response))
+            response, backend = call_backend(method_name, request)
+            status = 201 if method == "POST" and route == "/personas" else 200
+            logging.info("%s %s -> %s status=%s", method, route, backend, status)
+            self.send_json(status, response_json(response))
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             self.send_json(400, {"error": str(exc)})
         except grpc.RpcError as exc:
@@ -134,6 +181,8 @@ class PublicHandler(http.server.BaseHTTPRequestHandler):
                 grpc_status_http_code(exc.code()),
                 {"error": exc.details() or exc.code().name},
             )
+        except BackendUnavailable as exc:
+            self.send_json(503, {"error": str(exc)})
 
     def do_GET(self):
         self.handle_route("GET")
@@ -163,20 +212,72 @@ class ControlHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/__status":
             with backend_lock:
-                status = {"backends": backends, "next_backend": backends[next_backend]}
+                status = {
+                    "backends": backends,
+                    "healthy": sorted(healthy_backends),
+                    "mode": "blue-green" if forced_backend else "round-robin",
+                    "active": forced_backend,
+                }
             self.send_json(200, status)
             return
         self.send_json(404, {"error": "ruta no encontrada"})
+
+    def do_POST(self):
+        global forced_backend, previous_backend
+
+        if self.path not in ("/__switch", "/__rollback", "/__pool"):
+            self.send_json(404, {"error": "ruta no encontrada"})
+            return
+
+        if self.path == "/__pool":
+            with backend_lock:
+                previous_backend = forced_backend
+                forced_backend = None
+            self.send_json(200, {"status": "round-robin", "previous": previous_backend})
+            return
+
+        if self.path == "/__rollback":
+            with backend_lock:
+                target = previous_backend
+            if not target:
+                self.send_json(409, {"error": "no hay backend anterior para rollback"})
+                return
+        else:
+            try:
+                payload = self.read_json()
+                backend = str(payload.get("backend", "")).rstrip("/")
+                if not backend:
+                    version = str(payload["version"]).lower()
+                    backend = {"vieja": OLD_BACKEND_URL, "nueva": NEW_BACKEND_URL}[version]
+                backend_target(backend)
+            except (ValueError, KeyError, json.JSONDecodeError) as exc:
+                self.send_json(400, {"error": str(exc)})
+                return
+            target = backend
+
+        if not check_backend(target):
+            self.send_json(503, {"error": "backend no saludable", "backend": target})
+            return
+
+        with backend_lock:
+            previous = forced_backend
+            previous_backend = previous
+            forced_backend = target
+            healthy_backends.add(target)
+        logging.info("switch -> %s status=OK previous=%s", target, previous)
+        self.send_json(200, {"status": "switched", "backend": target, "previous": previous})
 
     def log_message(self, format, *args):
         return
 
 
 def run():
+    refresh_health()
     public_server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), PublicHandler)
     control_server = http.server.ThreadingHTTPServer(("127.0.0.1", CONTROL_PORT), ControlHandler)
     threading.Thread(target=control_server.serve_forever, daemon=True).start()
     threading.Thread(target=public_server.serve_forever, daemon=True).start()
+    threading.Thread(target=health_monitor, daemon=True).start()
     print(
         f"[*] Balanceador HTTP en {PORT}, backends gRPC {backends}; control local en {CONTROL_PORT}",
         flush=True,

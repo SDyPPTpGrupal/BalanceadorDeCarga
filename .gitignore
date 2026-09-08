@@ -41,10 +41,10 @@ wheels/
 *.jar
 logs/
 deploy/*
-!deploy/python/
-!deploy/python/.gitkeep
-!deploy/java/
-!deploy/java/.gitkeep
+!deploy/vieja/
+!deploy/vieja/.gitkeep
+!deploy/nueva/
+!deploy/nueva/.gitkeep
 
 # IDEs y editores
 .idea/

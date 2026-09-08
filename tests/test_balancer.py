@@ -76,6 +76,9 @@ class BalancerIntegrationTest(unittest.TestCase):
         balancer.OLD_BACKEND_URL = f"http://127.0.0.1:{cls.old_port}"
         balancer.NEW_BACKEND_URL = f"http://127.0.0.1:{cls.new_port}"
         balancer.backends = [balancer.OLD_BACKEND_URL, balancer.NEW_BACKEND_URL]
+        balancer.forced_backend = balancer.OLD_BACKEND_URL
+        balancer.previous_backend = None
+        balancer.refresh_health()
         balancer.next_backend = 0
         cls.public_server = http.server.ThreadingHTTPServer(
             ("127.0.0.1", cls.balancer_port), balancer.PublicHandler
@@ -104,6 +107,8 @@ class BalancerIntegrationTest(unittest.TestCase):
     def setUp(self):
         with balancer.backend_lock:
             balancer.next_backend = 0
+            balancer.forced_backend = None
+            balancer.previous_backend = None
 
     def request(self, method, path, payload=None):
         connection = HTTPConnection("127.0.0.1", self.balancer_port)
@@ -121,6 +126,18 @@ class BalancerIntegrationTest(unittest.TestCase):
         payload = json.loads(response.read())
         connection.close()
         return response.status, payload
+
+    def control_request(self, path, payload=None):
+        connection = HTTPConnection("127.0.0.1", self.control_port)
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        if body is not None:
+            headers["Content-Length"] = str(len(body))
+        connection.request("POST", path, body=body, headers=headers)
+        response = connection.getresponse()
+        result = json.loads(response.read())
+        connection.close()
+        return response.status, result
 
     def test_http_api_forwards_all_contract_operations(self):
         status, identidad = self.request("GET", "/")
@@ -145,15 +162,36 @@ class BalancerIntegrationTest(unittest.TestCase):
         status, created = self.request(
             "POST", "/personas", {"nombre": "Grace", "legajo": 100201}
         )
-        self.assertEqual(status, 200)
+        self.assertEqual(status, 201)
         self.assertEqual(created["servido_por"], "python")
 
     def test_requests_alternate_between_python_and_java(self):
+        self.control_request("/__pool")
         first_status, first = self.request("GET", "/")
         second_status, second = self.request("GET", "/")
         self.assertEqual(first_status, 200)
         self.assertEqual(second_status, 200)
         self.assertEqual([first["app"], second["app"]], ["python", "java"])
+
+    def test_blue_green_switch_and_rollback_without_restart(self):
+        with balancer.backend_lock:
+            balancer.forced_backend = balancer.OLD_BACKEND_URL
+
+        status, response = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertEqual(response["app"], "python")
+
+        status, response = self.control_request("/__switch", {"version": "nueva"})
+        self.assertEqual(status, 200, response)
+        status, response = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertEqual(response["app"], "java")
+
+        status, response = self.control_request("/__rollback")
+        self.assertEqual(status, 200, response)
+        status, response = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertEqual(response["app"], "python")
 
 
 if __name__ == "__main__":
