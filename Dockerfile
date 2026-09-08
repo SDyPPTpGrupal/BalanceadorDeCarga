@@ -10,8 +10,9 @@ ARG SSH_PORT=22
 ENV PORT=${PORT}
 ENV SSH_PORT=${SSH_PORT}
 ENV APP_USER=${APP_USER}
-ENV OLD_BACKEND_URL=http://app-python:9001
-ENV NEW_BACKEND_URL=http://app-java:9002
+ENV DEPLOY_DIR=/deploy
+ENV OLD_BACKEND_URL=http://host.docker.internal:9001
+ENV NEW_BACKEND_URL=http://host.docker.internal:9002
 
 # Instalar SSH, Python y herramientas básicas
 RUN apt-get update && \
@@ -26,8 +27,8 @@ RUN apt-get update && \
         nano && \
     rm -rf /var/lib/apt/lists/*
 
-# Crear directorio necesario para SSH
-RUN mkdir -p /run/sshd
+# Crear directorios necesarios para SSH y archivos subidos por SCP
+RUN mkdir -p /run/sshd /deploy/python /deploy/java
 
 # Crear usuario para los alumnos
 RUN useradd -m -s /bin/bash "${APP_USER}"
@@ -57,8 +58,8 @@ COPY contrato_pb2_grpc.py ./
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# El usuario alumno necesita poder leer/escribir en /app (para recibir archivos por SCP)
-RUN chown -R "${APP_USER}:${APP_USER}" /app
+# El usuario alumno necesita poder leer/escribir en el código y en los archivos subidos por SCP
+RUN chown -R "${APP_USER}:${APP_USER}" /app /deploy
 
 # 22: SSH para que los equipos entren a deployar
 # 80 (o el PORT que definas): API HTTP pública del balanceador

@@ -275,16 +275,17 @@ nodo registra qué hizo.
 
 ## 9. El servicio corre en contenedores
 
-El balanceador y cada aplicación son contenedores separados. La base es otro contenedor.
-El cliente externo solo conoce al balanceador; Python y Java no publican sus puertos gRPC fuera
-de la red interna.
+El balanceador corre en un contenedor Docker sobre el Windows que tiene Tailscale. Las aplicaciones
+Python y Java pueden correr directamente en ese Windows o en otros contenedores. El cliente externo
+solo conoce al balanceador.
 
 | Regla | Valor |
 | :--- | :--- |
 | Puerto público del balanceador | `80` (`PORT`) |
-| Puertos gRPC internos | Python `9001`, Java `9002` |
+| Puertos gRPC de los backends | Python `9001`, Java `9002` |
 | Variables del balanceador | `OLD_BACKEND_URL`, `NEW_BACKEND_URL` |
 | `HEALTHCHECK` público | `GET /health` |
+| SSH/SCP publicado en Windows | `2222` → contenedor `22` |
 | Usuario | **no-root** |
 | Apagado | el contenedor recibe `SIGTERM` y el servidor HTTP debe cerrarse ordenadamente |
 
@@ -304,6 +305,27 @@ manda `SIGKILL` en medio del drenado y el graceful shutdown no sirve de nada.
    de la red Docker, pero no necesitan publicar esos puertos al exterior.
 5. `GET /health` es el health check público del balanceador. El chequeo interno de una aplicación
    usa el RPC gRPC `Salud`.
+
+### Acceso de los equipos por Tailscale
+
+El Windows anfitrión publica el SSH del contenedor en el puerto `2222`. Con la IP Tailscale del
+Windows, los equipos pueden subir archivos sin exponer el puerto SSH a Internet:
+
+```powershell
+scp -P 2222 app.py alumno@IP_TAILSCALE_WINDOWS:/deploy/python/
+scp -P 2222 app.jar alumno@IP_TAILSCALE_WINDOWS:/deploy/java/
+```
+
+El contenedor se inicia con:
+
+```powershell
+docker compose up -d --build
+```
+
+Los archivos quedan en `deploy/python` y `deploy/java` del workspace de Windows. Subir un archivo
+no inicia automáticamente la aplicación: cada backend debe arrancar su servidor gRPC escuchando
+en `0.0.0.0:9001` (Python) o `0.0.0.0:9002` (Java). El balanceador los encuentra mediante
+`host.docker.internal`.
 
 ---
 

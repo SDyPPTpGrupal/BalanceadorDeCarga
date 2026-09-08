@@ -16,8 +16,8 @@ import contrato_pb2_grpc
 
 PORT = int(os.environ.get("PORT", 80))
 CONTROL_PORT = int(os.environ.get("CONTROL_PORT", 8088))
-OLD_BACKEND_URL = os.environ.get("OLD_BACKEND_URL", "http://app-python:9001").rstrip("/")
-NEW_BACKEND_URL = os.environ.get("NEW_BACKEND_URL", "http://app-java:9002").rstrip("/")
+OLD_BACKEND_URL = os.environ.get("OLD_BACKEND_URL", "http://host.docker.internal:9001").rstrip("/")
+NEW_BACKEND_URL = os.environ.get("NEW_BACKEND_URL", "http://host.docker.internal:9002").rstrip("/")
 LOG_FILE = os.environ.get("BALANCER_LOG", "balancer.log")
 
 backend_lock = threading.Lock()
