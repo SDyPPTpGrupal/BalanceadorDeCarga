@@ -14,11 +14,12 @@ ENV DEPLOY_DIR=/deploy
 ENV OLD_BACKEND_URL=http://host.docker.internal:9001
 ENV NEW_BACKEND_URL=http://host.docker.internal:9002
 
-# Instalar SSH, Python y herramientas básicas
+# Instalar SSH, Python, Java y herramientas básicas
 RUN apt-get update && \
     apt-get install -y \
         openssh-server \
         sudo \
+        openjdk-21-jre-headless \
         python3 \
         python3-pip \
         curl \
