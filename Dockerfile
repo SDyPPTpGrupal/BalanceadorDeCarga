@@ -11,8 +11,8 @@ ENV PORT=${PORT}
 ENV SSH_PORT=${SSH_PORT}
 ENV APP_USER=${APP_USER}
 ENV DEPLOY_DIR=/deploy
-ENV OLD_BACKEND_URL=http://host.docker.internal:9001
-ENV NEW_BACKEND_URL=http://host.docker.internal:9002
+ENV OLD_BACKEND_URL=http://127.0.0.1:9001
+ENV NEW_BACKEND_URL=http://127.0.0.1:9002
 
 # Instalar solo lo necesario para SSH/SCP, el balanceador Python y los JAR Java
 RUN apt-get update && \
@@ -32,9 +32,6 @@ RUN useradd -m -s /bin/bash "${APP_USER}"
 
 # Establecer contraseña
 RUN echo "${APP_USER}:${APP_PASSWORD}" | chpasswd
-
-# Dar sudo al usuario
-RUN echo "${APP_USER} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"${APP_USER}"
 
 # Configuración SSH
 RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config && \

@@ -17,8 +17,6 @@ services:
       DEPLOY_DIR: /deploy
       OLD_BACKEND_URL: ${OLD_BACKEND_URL:-http://127.0.0.1:9001}
       NEW_BACKEND_URL: ${NEW_BACKEND_URL:-http://127.0.0.1:9002}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     volumes:
       - ./deploy:/deploy
     restart: unless-stopped

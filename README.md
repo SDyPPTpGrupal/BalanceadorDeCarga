@@ -101,38 +101,19 @@ scp -P 2222 app-nuevo.jar usuario@IP_TAILSCALE_WINDOWS:/deploy/nueva/
 
 Los archivos quedan en las carpetas `deploy/vieja` y `deploy/nueva` del workspace de Windows, montadas dentro del contenedor como `/deploy`.
 
-Subir un archivo no lo ejecuta automaticamente. Hay que iniciar cada backend dentro del contenedor como proceso gRPC separado.
+Al levantar el contenedor, `entrypoint.sh` busca automaticamente el primer `.py` o `.jar` de cada carpeta y lo inicia como proceso gRPC:
 
-## Iniciar los backends
-
-Los comandos exactos dependen de los archivos entregados por los equipos. La idea es:
-
-```powershell
-docker compose exec -d balanceador sh -c "PORT=9001 python3 /deploy/vieja/app.py"
+```text
+/deploy/vieja/*.py o *.jar -> puerto 9001
+/deploy/nueva/*.py o *.jar -> puerto 9002
 ```
 
-Para iniciar la version nueva en Java:
+No hay que ejecutar comandos `docker compose exec` separados para iniciar los backends.
+
+Los nombres `app.py` y `app.jar` son ejemplos. El `.py` debe aceptar `--port` y el `.jar` debe aceptar el puerto como primer argumento. Si un Python subido tiene dependencias adicionales, instalarlas antes de levantar el contenedor:
 
 ```powershell
-docker compose exec -d balanceador java -jar /deploy/nueva/app.jar --port=9002
-```
-
-Si la version vieja es Java:
-
-```powershell
-docker compose exec -d balanceador java -jar /deploy/vieja/app.jar --port=9001
-```
-
-Si la version nueva es Python:
-
-```powershell
-docker compose exec -d balanceador sh -c "PORT=9002 python3 /deploy/nueva/app.py"
-```
-
-Los nombres `app.py`, `app.jar` y la opcion `--port` son ejemplos: reemplazarlos por los nombres y argumentos reales de cada equipo. Si un Python subido tiene dependencias adicionales, subir tambien su `requirements.txt` e instalarlas dentro del contenedor:
-
-```powershell
-docker compose exec balanceador pip3 install -r /deploy/nueva/requirements.txt --break-system-packages
+docker compose run --rm balanceador pip3 install -r /deploy/nueva/requirements.txt --break-system-packages
 ```
 
 ### Servidores de prueba incluidos
@@ -194,13 +175,13 @@ El control escucha solamente dentro del contenedor, en `127.0.0.1:8088`. Se pued
 Conmutar a la version nueva:
 
 ```powershell
-docker compose exec balanceador curl -s -X POST http://127.0.0.1:8088/__switch -H "Content-Type: application/json" -d '{"version":"nueva"}'
+'{"version":"nueva"}' | docker compose exec -T balanceador curl -s -X POST http://127.0.0.1:8088/__switch -H "Content-Type: application/json" --data-binary '@-'
 ```
 
 Volver a la version vieja:
 
 ```powershell
-docker compose exec balanceador curl -s -X POST http://127.0.0.1:8088/__switch -H "Content-Type: application/json" -d '{"version":"vieja"}'
+'{"version":"vieja"}' | docker compose exec -T balanceador curl -s -X POST http://127.0.0.1:8088/__switch -H "Content-Type: application/json" --data-binary '@-'
 ```
 
 Rollback al backend anterior:
