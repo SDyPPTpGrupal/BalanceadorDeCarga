@@ -75,11 +75,8 @@ class BalancerIntegrationTest(unittest.TestCase):
         balancer.CONTROL_PORT = cls.control_port
         balancer.OLD_BACKEND_URL = f"http://127.0.0.1:{cls.old_port}"
         balancer.NEW_BACKEND_URL = f"http://127.0.0.1:{cls.new_port}"
-        balancer.backends = [balancer.OLD_BACKEND_URL, balancer.NEW_BACKEND_URL]
         balancer.forced_backend = balancer.OLD_BACKEND_URL
         balancer.previous_backend = None
-        balancer.refresh_health()
-        balancer.next_backend = 0
         cls.public_server = http.server.ThreadingHTTPServer(
             ("127.0.0.1", cls.balancer_port), balancer.PublicHandler
         )
@@ -106,8 +103,7 @@ class BalancerIntegrationTest(unittest.TestCase):
 
     def setUp(self):
         with balancer.backend_lock:
-            balancer.next_backend = 0
-            balancer.forced_backend = None
+            balancer.forced_backend = balancer.OLD_BACKEND_URL
             balancer.previous_backend = None
 
     def request(self, method, path, payload=None):
@@ -146,7 +142,7 @@ class BalancerIntegrationTest(unittest.TestCase):
 
         status, salud = self.request("GET", "/health")
         self.assertEqual(status, 200)
-        self.assertEqual(salud["app"], "java")
+        self.assertEqual(salud["app"], "python")
 
         status, echo = self.request("POST", "/echo", {"ping": "hola"})
         self.assertEqual(status, 200)
@@ -165,18 +161,7 @@ class BalancerIntegrationTest(unittest.TestCase):
         self.assertEqual(status, 201)
         self.assertEqual(created["servido_por"], "python")
 
-    def test_requests_alternate_between_python_and_java(self):
-        self.control_request("/__pool")
-        first_status, first = self.request("GET", "/")
-        second_status, second = self.request("GET", "/")
-        self.assertEqual(first_status, 200)
-        self.assertEqual(second_status, 200)
-        self.assertEqual([first["app"], second["app"]], ["python", "java"])
-
     def test_blue_green_switch_and_rollback_without_restart(self):
-        with balancer.backend_lock:
-            balancer.forced_backend = balancer.OLD_BACKEND_URL
-
         status, response = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertEqual(response["app"], "python")
