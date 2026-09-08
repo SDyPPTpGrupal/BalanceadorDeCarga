@@ -16,8 +16,6 @@ para el tráfico HTTP del servicio.
 
 ## Diagrama de arquitectura
 
-![Arquitectura Parte 1](diagrama-arquitectura-parte1.png)
-
 El servidor es un recurso compartido operado por el equipo de Plataforma
 (el "cloud provider"): ellos lo montan y reparten el acceso, pero no lo
 usan para su propia app. Dentro corre un container Docker (Ubuntu 24.04)
